@@ -1,0 +1,4 @@
+# Versions this lab was tested with. Bump deliberately, then re-run evals.
+strands-agents[ollama,otel]==1.62.0
+psycopg[binary]==3.3.6
+requests==2.34.2

@@ -1,0 +1,36 @@
+# Least-privilege identity for the AI agent.
+# It can read pods, pod logs and events in ONE namespace. Nothing else.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-agent
+  namespace: ai-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-agent-readonly
+  namespace: payments
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-agent-readonly
+  namespace: payments
+subjects:
+  - kind: ServiceAccount
+    name: ai-agent
+    namespace: ai-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ai-agent-readonly

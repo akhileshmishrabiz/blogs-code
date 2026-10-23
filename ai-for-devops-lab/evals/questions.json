@@ -1,0 +1,8 @@
+[
+  {"question": "A pod is stuck in Pending. What should I check first?",
+   "expected_source": "pod-pending.md", "must_contain": ["describe"]},
+  {"question": "What does OOMKilled mean and how do I fix it?",
+   "expected_source": "oomkilled.md", "must_contain": ["memory"]},
+  {"question": "My container keeps restarting with CrashLoopBackOff. Where do I look?",
+   "expected_source": "crashloopbackoff.md", "must_contain": ["logs"]}
+]
