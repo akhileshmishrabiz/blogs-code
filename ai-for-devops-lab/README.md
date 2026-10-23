@@ -32,9 +32,14 @@ If you change it, run `docker compose down -v` to start fresh.
 |---|---|---|
 | 1 | `docker exec -it ollama ollama run llama3.2` | An interactive chat |
 | 2 | `python agent/log_analyzer.py some-events.log` | Validated JSON with root_cause, evidence, fix |
-| 3 | `python agent/rag.py ingest runbooks` then `python agent/rag.py "Why is my pod stuck in Pending?"` | An answer plus `Sources:` |
+| 3 | `python agent/rag.py ingest runbooks` then `python agent/rag.py "Why is my pod stuck in Pending?"`. Or in Docker: `docker compose run --rm rag` | An answer plus `Sources:` |
 | 4 | `./k8s/setup-cluster.sh` then `docker compose run --rm agent python agent.py "Investigate payments"` | The lead agent delegates and writes a summary |
-| 6 | Open http://localhost:6006 after a Stage 4 run. `python evals/run_evals.py` | Traces per agent and tool call. `3/3 passed` |
+| 6 | Open http://localhost:6006 after a Stage 4 run. `python evals/run_evals.py` or `docker compose run --rm rag python evals/run_evals.py` | Traces per agent and tool call. `3/3 passed` |
+
+## Two containers, two permission levels
+
+`rag` (Stages 3 and 6) has database and model access only. No kubeconfig, no cluster network, so it works before kind exists.
+`agent` (Stages 4 and 5) adds the read-only kubeconfig and joins the `kind` network. Run `./k8s/setup-cluster.sh` first.
 
 ## Safety model
 
@@ -57,7 +62,7 @@ Model responses were simulated, so answer quality depends on the model you pull.
 
 - **Tool calls are flaky or ignored**: small models struggle with tools. Use `llama3.1` (8B) or larger for Stages 4 and 5.
 - **`relation "runbook_chunks" does not exist`**: the volume existed before `init.sql` was mounted. `docker compose down -v && docker compose up -d`.
-- **`network kind declared as external, but could not be found`**: run `./k8s/setup-cluster.sh` first. kind creates that network.
+- **`network kind declared as external, but could not be found`**: you ran the `agent` service before the cluster exists. Use `rag` for Stages 3 and 6, or run `./k8s/setup-cluster.sh` first.
 - **Agent cannot reach the cluster**: the kubeconfig must use the internal address (`kind get kubeconfig --internal`). The setup script does this.
 - **Token expired**: tokens last 8 hours. Re-run `./k8s/setup-cluster.sh`.
 - **No traces in Phoenix**: check `OTEL_EXPORTER_OTLP_ENDPOINT` is the base URL (`http://phoenix:6006` in Compose, `http://localhost:6006` on your laptop). The exporter adds `/v1/traces`.

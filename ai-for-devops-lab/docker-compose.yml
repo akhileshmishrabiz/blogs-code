@@ -1,5 +1,6 @@
 # AI for DevOps lab. Bring it up with:  docker compose up -d
-# Then:  docker compose run --rm agent python rag.py ingest runbooks
+# Then:  docker compose run --rm rag                                    (ingest runbooks, no cluster needed)
+#        ./k8s/setup-cluster.sh                                       (Stage 4, creates the kind cluster)
 #        docker compose run --rm agent python agent.py "Investigate the payments namespace"
 services:
   ollama:
@@ -43,6 +44,22 @@ services:
     image: arizephoenix/phoenix:20.25.0
     ports: ["6006:6006"]  # UI and OTLP/HTTP trace ingestion (/v1/traces)
 
+  # Stages 3 and 6: RAG and evals. No Kubernetes credentials, no cluster network.
+  rag:
+    build: ./agent
+    profiles: ["tools"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/postgres
+    volumes:
+      - ./runbooks:/app/runbooks:ro
+      - ./evals:/app/evals:ro
+    command: ["python", "rag.py", "ingest", "runbooks"]
+    depends_on:
+      ollama-init: {condition: service_completed_successfully}
+      db: {condition: service_healthy}
+
+  # Stages 4 and 5: the agent. Needs the kind cluster (run ./k8s/setup-cluster.sh first).
   agent:
     build: ./agent
     profiles: ["tools"]   # not started by "up"; used with "docker compose run"
