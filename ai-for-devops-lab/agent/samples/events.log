@@ -1,0 +1,7 @@
+LAST SEEN   TYPE      REASON      OBJECT                         MESSAGE
+2m          Normal    Scheduled   pod/checkout-6c9d8b7f4-x2kqp   Successfully assigned payments/checkout-6c9d8b7f4-x2kqp to ai-lab-control-plane
+2m          Normal    Pulling     pod/checkout-6c9d8b7f4-x2kqp   Pulling image "nginx:does-not-exist"
+2m          Warning   Failed      pod/checkout-6c9d8b7f4-x2kqp   Failed to pull image "nginx:does-not-exist": rpc error: code = NotFound desc = failed to resolve reference "docker.io/library/nginx:does-not-exist": not found
+2m          Warning   Failed      pod/checkout-6c9d8b7f4-x2kqp   Error: ErrImagePull
+90s         Normal    BackOff     pod/checkout-6c9d8b7f4-x2kqp   Back-off pulling image "nginx:does-not-exist"
+90s         Warning   Failed      pod/checkout-6c9d8b7f4-x2kqp   Error: ImagePullBackOff
