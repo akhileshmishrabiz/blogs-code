@@ -5,36 +5,57 @@ Everything runs locally in Docker. No API keys, no cloud account.
 
 ## Prerequisites
 
-- Docker with Compose v2
-- Python 3.10+ (for the stage scripts you run on your laptop)
-- [kind](https://kind.sigs.k8s.io/) and kubectl (from Stage 4)
-- About 15 GB free disk (models plus images) and 16 GB RAM recommended
-- Optional: NVIDIA GPU with the NVIDIA Container Toolkit. On a Mac, Ollama in Docker runs on CPU. Slower, still fine for learning.
+- Docker Desktop (Mac) or Docker Engine with Compose v2 (Linux)
+- kind and kubectl. On a Mac: `brew install kind kubectl`
+- Docker memory set to 10 GB or more. Docker Desktop > Settings > Resources
+- About 15 GB free disk for images and models
 
-## Quick start
+No Python needed on your machine. Every stage runs in containers.
+On a Mac, Docker runs the models on CPU. It works. The agent stage takes a few minutes.
+
+## Run the whole demo
+
+```bash
+./demo.sh
+```
+
+It checks your setup, brings the lab up, runs every stage, prints PASS or FAIL for each,
+and pauses at 5 moments worth a screenshot. Use `./demo.sh --no-pause` to run straight through.
+First run downloads about 8 GB, so expect 15 to 30 minutes. Logs land in `demo-output/`.
+
+Clean up afterwards with `./demo.sh --cleanup`.
+
+Before you run it on a Mac:
+
+- Quit the Ollama menu bar app if you have it. It uses port 11434.
+- Stop any local Postgres (Postgres.app or brew). It uses port 5432.
+
+The script checks both and tells you if something is in the way.
+
+## Manual setup
 
 ```bash
 docker compose up -d                  # Ollama, model pull job, pgvector, Phoenix
 docker compose logs -f ollama-init    # wait until the three models are pulled (one-time, several GB)
-docker compose ps                     # ollama, db, phoenix running; ollama-init exited (0)
-
-python -m venv .venv && source .venv/bin/activate
-pip install -r agent/requirements.txt
+docker compose ps -a                  # ollama, db, phoenix running; ollama-init exited (0)
 ```
 
-`docker compose up -d` starts the services. The first run is not "ready" until `ollama-init` has finished pulling models.
+`docker compose up -d` starts the services. The lab is not ready until `ollama-init` has finished pulling models.
 The database schema is created automatically from `db/init.sql`, but only on an empty data volume.
 If you change it, run `docker compose down -v` to start fresh.
+
+Want to run the scripts with your own Python instead of containers? Use Python 3.10+
+(macOS ships 3.9, so `brew install python@3.12`), then `pip install -r agent/requirements.txt`.
 
 ## Stages
 
 | Stage | Run | What you should see |
 |---|---|---|
 | 1 | `docker exec -it ollama ollama run llama3.2` | An interactive chat |
-| 2 | `python agent/log_analyzer.py some-events.log` | Validated JSON with root_cause, evidence, fix |
-| 3 | `python agent/rag.py ingest runbooks` then `python agent/rag.py "Why is my pod stuck in Pending?"`. Or in Docker: `docker compose run --rm rag` | An answer plus `Sources:` |
+| 2 | `docker compose run --rm rag python log_analyzer.py samples/events.log` | Validated JSON with root_cause, evidence, fix |
+| 3 | `docker compose run --rm rag` then `docker compose run --rm rag python rag.py "Why is my pod stuck in Pending?"` | An answer plus `Sources:` |
 | 4 | `./k8s/setup-cluster.sh` then `docker compose run --rm agent python agent.py "Investigate payments"` | The lead agent delegates and writes a summary |
-| 6 | Open http://localhost:6006 after a Stage 4 run. `python evals/run_evals.py` or `docker compose run --rm rag python evals/run_evals.py` | Traces per agent and tool call. `3/3 passed` |
+| 6 | Open http://localhost:6006 after a Stage 4 run. `docker compose run --rm rag python evals/run_evals.py` | Traces per agent and tool call. `3/3 passed` |
 
 ## Two containers, two permission levels
 
@@ -50,16 +71,19 @@ Never mount your own admin kubeconfig. The tool code adds a second layer: namesp
 
 ## Tested versions
 
-Python: strands-agents 1.62.0, psycopg 3.3.6, requests 2.34.2, Phoenix 20.25.0, pgvector 0.8.0.
+Python packages are pinned in `agent/requirements.txt` (strands-agents 1.62.0, psycopg 3.3.6, requests 2.34.2).
+pgvector is pinned (`0.8.0-pg17`). Ollama and Phoenix use `latest`. After a good run, pin them to the versions you got:
+`docker image inspect ollama/ollama:latest` and the Phoenix version in its UI footer.
 
-What was tested: every Python file against real Postgres + pgvector and a real Phoenix server. RAG ingest
-(including re-ingest without duplicates), retrieval, evals, JSON validation, tool guards, multi-agent delegation,
-and trace export (spans for every agent, model call and tool call, with token counts) all passed.
-Model responses were simulated, so answer quality depends on the model you pull.
-`docker compose config` validates. Image tags are pinned. If a pull fails, check the tag on Docker Hub.
+What was tested: every Python file against real Postgres + pgvector and a real Phoenix server, and `demo.sh`
+end to end with all 14 checks passing. RAG ingest (re-ingest without duplicates), retrieval, evals,
+JSON validation, tool guards, multi-agent delegation and trace export all work. In that test the model
+answers, Docker and the cluster were simulated, so model answer quality depends on the model you pull.
 
 ## Troubleshooting
 
+- **Port 11434 or 5432 in use**: the Ollama Mac app or a local Postgres is running. Quit it.
+- **Containers killed or very slow**: Docker needs more memory. Docker Desktop > Settings > Resources, 10 GB+.
 - **Tool calls are flaky or ignored**: small models struggle with tools. Use `llama3.1` (8B) or larger for Stages 4 and 5.
 - **`relation "runbook_chunks" does not exist`**: the volume existed before `init.sql` was mounted. `docker compose down -v && docker compose up -d`.
 - **`network kind declared as external, but could not be found`**: you ran the `agent` service before the cluster exists. Use `rag` for Stages 3 and 6, or run `./k8s/setup-cluster.sh` first.

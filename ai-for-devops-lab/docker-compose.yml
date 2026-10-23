@@ -1,10 +1,12 @@
-# AI for DevOps lab. Bring it up with:  docker compose up -d
+# AI for DevOps lab. Easiest path: ./demo.sh (runs and checks every stage).
+# Manual: docker compose up -d
 # Then:  docker compose run --rm rag                                    (ingest runbooks, no cluster needed)
 #        ./k8s/setup-cluster.sh                                       (Stage 4, creates the kind cluster)
 #        docker compose run --rm agent python agent.py "Investigate the payments namespace"
 services:
   ollama:
-    image: ollama/ollama:0.40.9
+    image: ollama/ollama:latest
+    container_name: ollama   # so "docker exec ollama ..." in the article works
     ports: ["11434:11434"]
     volumes: [ollama:/root/.ollama]
     healthcheck:
@@ -19,7 +21,7 @@ services:
 
   # One-shot job: pulls the models, then exits. Re-runs are fast (models are cached in the volume).
   ollama-init:
-    image: ollama/ollama:0.40.9
+    image: ollama/ollama:latest
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["sh", "-c", "ollama pull llama3.1 && ollama pull llama3.2 && ollama pull nomic-embed-text"]
@@ -41,7 +43,7 @@ services:
       retries: 12
 
   phoenix:
-    image: arizephoenix/phoenix:20.25.0
+    image: arizephoenix/phoenix:latest
     ports: ["6006:6006"]  # UI and OTLP/HTTP trace ingestion (/v1/traces)
 
   # Stages 3 and 6: RAG and evals. No Kubernetes credentials, no cluster network.
