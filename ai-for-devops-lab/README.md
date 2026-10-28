@@ -1,92 +1,158 @@
 # AI for DevOps Lab
 
-Companion repo for **"Stop Over-Complicating AI: This Is How You Learn AI for DevOps"**.
-Everything runs locally in Docker. No API keys, no cloud account.
+Companion code for **"Stop Over-Complicating AI: This Is How You Learn AI for DevOps"**.
+Everything runs locally. No API keys, no cloud account. Every step is a plain command you run yourself.
 
-## Prerequisites
+## Before you start
 
-- Docker Desktop (Mac) or Docker Engine with Compose v2 (Linux)
-- kind and kubectl. On a Mac: `brew install kind kubectl`
-- Docker memory set to 10 GB or more. Docker Desktop > Settings > Resources
-- About 15 GB free disk for images and models
+- Docker Desktop running (Mac) or Docker Engine with Compose v2 (Linux)
+- Docker memory set to 10 GB or more (Docker Desktop > Settings > Resources)
+- About 15 GB free disk
+- kind and kubectl: `brew install kind kubectl` on a Mac
+- Quit the Ollama menu bar app and any local Postgres. They use ports 11434 and 5432.
 
-No Python needed on your machine. Every stage runs in containers.
-On a Mac, Docker runs the models on CPU. It works. The agent stage takes a few minutes.
-
-## Run the whole demo
+Clone the repo and go into the lab folder. Every command below runs from here:
 
 ```bash
-./demo.sh
+git clone https://github.com/akhileshmishrabiz/blogs-code.git
+cd blogs-code/ai-for-devops-lab
 ```
 
-It checks your setup, brings the lab up, runs every stage, prints PASS or FAIL for each,
-and pauses at 5 moments worth a screenshot. Use `./demo.sh --no-pause` to run straight through.
-First run downloads about 8 GB, so expect 15 to 30 minutes. Logs land in `demo-output/`.
+## Step 1: Create the kind cluster
 
-Clean up afterwards with `./demo.sh --cleanup`.
-
-Before you run it on a Mac:
-
-- Quit the Ollama menu bar app if you have it. It uses port 11434.
-- Stop any local Postgres (Postgres.app or brew). It uses port 5432.
-
-The script checks both and tells you if something is in the way.
-
-## Manual setup
+Create the cluster first. kind creates a Docker network called `kind`, and the agent container joins it later. Compose fails if that network doesn't exist yet.
 
 ```bash
-docker compose up -d                  # Ollama, model pull job, pgvector, Phoenix
-docker compose logs -f ollama-init    # wait until the three models are pulled (one-time, several GB)
-docker compose ps -a                  # ollama, db, phoenix running; ollama-init exited (0)
+kind create cluster --name ai-lab
+kubectl config use-context kind-ai-lab
+kubectl get nodes
 ```
 
-`docker compose up -d` starts the services. The lab is not ready until `ollama-init` has finished pulling models.
-The database schema is created automatically from `db/init.sql`, but only on an empty data volume.
-If you change it, run `docker compose down -v` to start fresh.
+`kubectl get nodes` should show one node, `ai-lab-control-plane`, with status `Ready`.
 
-Want to run the scripts with your own Python instead of containers? Use Python 3.10+
-(macOS ships 3.9, so `brew install python@3.12`), then `pip install -r agent/requirements.txt`.
+Create the broken app the agent will investigate:
 
-## Stages
+```bash
+kubectl create namespace payments
+kubectl -n payments create deployment checkout --image=nginx:does-not-exist
+```
 
-| Stage | Run | What you should see |
-|---|---|---|
-| 1 | `docker exec -it ollama ollama run llama3.2` | An interactive chat |
-| 2 | `docker compose run --rm rag python log_analyzer.py samples/events.log` | Validated JSON with root_cause, evidence, fix |
-| 3 | `docker compose run --rm rag` then `docker compose run --rm rag python rag.py "Why is my pod stuck in Pending?"` | An answer plus `Sources:` |
-| 4 | `./k8s/setup-cluster.sh` then `docker compose run --rm agent python agent.py "Investigate payments"` | The lead agent delegates and writes a summary |
-| 6 | Open http://localhost:6006 after a Stage 4 run. `docker compose run --rm rag python evals/run_evals.py` | Traces per agent and tool call. `3/3 passed` |
+Create the read-only identity for the agent:
 
-## Two containers, two permission levels
+```bash
+kubectl apply -f k8s/agent-readonly-rbac.yaml
+```
 
-`rag` (Stages 3 and 6) has database and model access only. No kubeconfig, no cluster network, so it works before kind exists.
-`agent` (Stages 4 and 5) adds the read-only kubeconfig and joins the `kind` network. Run `./k8s/setup-cluster.sh` first.
+Check what that identity can do. The first answer should be `yes`, the other two `no`:
+
+```bash
+kubectl auth can-i list pods -n payments --as=system:serviceaccount:ai-agent:ai-agent
+kubectl auth can-i delete pods -n payments --as=system:serviceaccount:ai-agent:ai-agent
+kubectl auth can-i list secrets -A --as=system:serviceaccount:ai-agent:ai-agent
+```
+
+Build the agent's own kubeconfig. It holds a token for that identity and no admin credentials. The token lasts 8 hours.
+
+```bash
+mkdir -p kube
+kind get kubeconfig --name ai-lab --internal > kube/internal.yaml
+SERVER=$(kubectl --kubeconfig kube/internal.yaml config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+kubectl --kubeconfig kube/internal.yaml config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > kube/ca.crt
+TOKEN=$(kubectl create token ai-agent -n ai-agent --duration=8h)
+
+kubectl config set-cluster ai-lab --kubeconfig kube/agent-kubeconfig --server="$SERVER" --certificate-authority=kube/ca.crt --embed-certs=true
+kubectl config set-credentials ai-agent --kubeconfig kube/agent-kubeconfig --token="$TOKEN"
+kubectl config set-context ai-agent --kubeconfig kube/agent-kubeconfig --cluster=ai-lab --user=ai-agent --namespace=payments
+kubectl config use-context ai-agent --kubeconfig kube/agent-kubeconfig
+
+rm kube/internal.yaml kube/ca.crt
+```
+
+Check that the file works for the agent identity only:
+
+```bash
+kubectl --kubeconfig kube/agent-kubeconfig get pods
+```
+
+You should see `checkout` in `ImagePullBackOff` or `ErrImagePull`.
+
+## Step 2: Start the lab with Compose
+
+```bash
+docker compose up -d
+docker compose ps -a
+```
+
+`ollama`, `db` and `phoenix` should show `Up`. `ollama-init` pulls the models, then shows `Exited (0)`. The first pull downloads several GB, so wait until that status appears:
+
+```bash
+docker compose logs ollama-init
+```
+
+Check the model server is answering:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+## Step 3: Run each stage
+
+Each command below is one stage from the article.
+
+**Stage 1: call the model with curl**
+
+```bash
+curl http://localhost:11434/api/generate -d '{"model": "llama3.2", "prompt": "What causes CrashLoopBackOff?", "stream": false}'
+```
+
+**Stage 2: log file to validated JSON**
+
+```bash
+docker compose run --rm rag python log_analyzer.py samples/events.log
+```
+
+**Stage 3: ingest runbooks, then ask a question**
+
+```bash
+docker compose run --rm rag
+docker compose run --rm rag python rag.py "A pod is stuck in Pending. What should I check first?"
+```
+
+The answer ends with `Sources: runbooks/...`.
+
+**Stage 4 and 5: the incident lead agent**
+
+```bash
+docker compose run --rm agent python agent.py "Checkout is failing. Investigate the payments namespace and tell me why."
+```
+
+**Stage 6: evals and traces**
+
+```bash
+docker compose run --rm rag python evals/run_evals.py
+```
+
+Then open http://localhost:6006 in your browser. The newest trace shows the lead agent, the specialists, every model call and every tool call.
+
+## Clean up
+
+```bash
+docker compose down -v
+kind delete cluster --name ai-lab
+```
+
+`down -v` removes the database and model volumes. `kind delete cluster` removes the cluster.
 
 ## Safety model
 
-The agent uses `kube/agent-kubeconfig`, generated by `k8s/setup-cluster.sh`, for a service account that can only
-get/list/watch pods, pod logs and events in `payments`. The script prints `kubectl auth can-i` checks so you can see it.
-Never mount your own admin kubeconfig. The tool code adds a second layer: namespace allowlist, name validation,
-15 s timeouts, exit-code checks, truncated output. The system prompt is not a security boundary.
-
-## Tested versions
-
-Python packages are pinned in `agent/requirements.txt` (strands-agents 1.62.0, psycopg 3.3.6, requests 2.34.2).
-pgvector is pinned (`0.8.0-pg17`). Ollama and Phoenix use `latest`. After a good run, pin them to the versions you got:
-`docker image inspect ollama/ollama:latest` and the Phoenix version in its UI footer.
-
-What was tested: every Python file against real Postgres + pgvector and a real Phoenix server, and `demo.sh`
-end to end with all 14 checks passing. RAG ingest (re-ingest without duplicates), retrieval, evals,
-JSON validation, tool guards, multi-agent delegation and trace export all work. In that test the model
-answers, Docker and the cluster were simulated, so model answer quality depends on the model you pull.
+The agent uses `kube/agent-kubeconfig`, a token for the `ai-agent` service account. That account can only get, list and watch pods, pod logs and events in `payments`. It cannot delete anything or read secrets. Never mount your own admin kubeconfig into the agent.
 
 ## Troubleshooting
 
-- **Port 11434 or 5432 in use**: the Ollama Mac app or a local Postgres is running. Quit it.
-- **Containers killed or very slow**: Docker needs more memory. Docker Desktop > Settings > Resources, 10 GB+.
-- **Tool calls are flaky or ignored**: small models struggle with tools. Use `llama3.1` (8B) or larger for Stages 4 and 5.
-- **`relation "runbook_chunks" does not exist`**: the volume existed before `init.sql` was mounted. `docker compose down -v && docker compose up -d`.
-- **`network kind declared as external, but could not be found`**: you ran the `agent` service before the cluster exists. Use `rag` for Stages 3 and 6, or run `./k8s/setup-cluster.sh` first.
-- **Agent cannot reach the cluster**: the kubeconfig must use the internal address (`kind get kubeconfig --internal`). The setup script does this.
-- **Token expired**: tokens last 8 hours. Re-run `./k8s/setup-cluster.sh`.
-- **No traces in Phoenix**: check `OTEL_EXPORTER_OTLP_ENDPOINT` is the base URL (`http://phoenix:6006` in Compose, `http://localhost:6006` on your laptop). The exporter adds `/v1/traces`.
+- **`network kind declared as external, but could not be found`**: you started the `agent` service before Step 1. Create the cluster first. The `rag` service doesn't need it.
+- **Port 11434 or 5432 already in use**: the Ollama Mac app or a local Postgres is running. Quit it. To stop Homebrew's Ollama service: `brew services stop ollama`.
+- **Containers killed or very slow**: give Docker more memory. Docker Desktop > Settings > Resources, 10 GB or more.
+- **Tool calls ignored or flaky**: small models struggle with tools. Set `MODEL_ID` in `docker-compose.yml` to a larger model.
+- **`Unauthorized` from the agent**: the token expired after 8 hours. Repeat the Step 1 kubeconfig commands from `kind get kubeconfig` onwards.
+- **`docker compose up` pulls slowly or stalls**: that's the model download. Check progress with `docker compose logs ollama-init`.
+- **No traces in Phoenix**: the agent sends traces to `http://phoenix:6006` inside Compose. Run the agent with `docker compose run`, not on your laptop.

@@ -1,4 +1,3 @@
 kube/agent-kubeconfig
 .venv/
 __pycache__/
-demo-output/

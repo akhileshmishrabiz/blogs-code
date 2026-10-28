@@ -1,8 +1,8 @@
-# AI for DevOps lab. Easiest path: ./demo.sh (runs and checks every stage).
-# Manual: docker compose up -d
-# Then:  docker compose run --rm rag                                    (ingest runbooks, no cluster needed)
-#        ./k8s/setup-cluster.sh                                       (Stage 4, creates the kind cluster)
-#        docker compose run --rm agent python agent.py "Investigate the payments namespace"
+# AI for DevOps lab. Follow README.md, in this order:
+#   1. kind create cluster --name ai-lab      (creates the "kind" network the agent needs)
+#   2. docker compose up -d                   (Ollama, Postgres with pgvector, Phoenix)
+#   3. docker compose run --rm rag ...        (stages 2, 3 and 6)
+#   4. docker compose run --rm agent ...      (stages 4 and 5)
 services:
   ollama:
     image: ollama/ollama:latest
@@ -61,7 +61,7 @@ services:
       ollama-init: {condition: service_completed_successfully}
       db: {condition: service_healthy}
 
-  # Stages 4 and 5: the agent. Needs the kind cluster (run ./k8s/setup-cluster.sh first).
+  # Stages 4 and 5: the agent. Needs the kind cluster and kube/agent-kubeconfig (see README Step 1).
   agent:
     build: ./agent
     profiles: ["tools"]   # not started by "up"; used with "docker compose run"
